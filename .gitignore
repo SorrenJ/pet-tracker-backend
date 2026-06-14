@@ -141,3 +141,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# App runtime data
+data/
+uploads/
+
+# Claude Code
+.claude/
