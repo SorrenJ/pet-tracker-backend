@@ -9,7 +9,8 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT,
+      google_id TEXT UNIQUE,
       name TEXT NOT NULL,
       distance_unit TEXT NOT NULL DEFAULT 'km',
       created_at TEXT NOT NULL

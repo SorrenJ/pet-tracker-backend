@@ -1,11 +1,36 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const https = require('https');
 const { v4: uuidv4 } = require('uuid');
 const { pool } = require('../config/database');
 const auth = require('../middleware/auth');
 
 const router = express.Router();
+
+function verifyGoogleIdToken(idToken) {
+  return new Promise((resolve, reject) => {
+    const url = `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`;
+    https.get(url, res => {
+      let raw = '';
+      res.on('data', chunk => {
+        raw += chunk;
+      });
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          reject(new Error('Invalid Google token'));
+          return;
+        }
+        try {
+          const payload = JSON.parse(raw);
+          resolve(payload);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
 
 function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -54,8 +79,55 @@ router.post('/login', async (req, res, next) => {
 
     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
     const user = rows[0];
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    const validPassword = user?.password_hash && (await bcrypt.compare(password, user.password_hash));
+    if (!user || !validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    res.json({ token: signToken(user.id), user: formatUser(user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/google
+router.post('/google', async (req, res, next) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ error: 'idToken is required' });
+    }
+
+    const payload = await verifyGoogleIdToken(idToken);
+    const audience = payload.aud || payload.audience;
+    const email = payload.email?.toLowerCase();
+    const googleId = payload.sub;
+    const name = payload.name || '';
+    const emailVerified = payload.email_verified === 'true' || payload.email_verified === true;
+
+    if (!email || !googleId || !emailVerified || audience !== process.env.GOOGLE_CLIENT_ID) {
+      return res.status(401).json({ error: 'Invalid Google token' });
+    }
+
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    let user = rows[0];
+
+    if (user) {
+      if (user.google_id && user.google_id !== googleId) {
+        return res.status(401).json({ error: 'Google account mismatch' });
+      }
+
+      if (!user.google_id) {
+        await pool.query('UPDATE users SET google_id = $1 WHERE id = $2', [googleId, user.id]);
+        user.google_id = googleId;
+      }
+    } else {
+      const id = uuidv4();
+      const { rows: inserted } = await pool.query(
+        'INSERT INTO users (id, email, google_id, name, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, distance_unit',
+        [id, email, googleId, name || email, new Date().toISOString()]
+      );
+      user = inserted[0];
     }
 
     res.json({ token: signToken(user.id), user: formatUser(user) });
