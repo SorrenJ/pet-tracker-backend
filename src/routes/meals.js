@@ -131,6 +131,175 @@ router.put('/budget', auth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Meal Schedules (Routines) ───────────────────────────────────────────────
+
+// GET /api/meals/schedules?petId=
+router.get('/schedules', auth, async (req, res, next) => {
+  try {
+    const { petId } = req.query;
+    if (!petId) return res.status(400).json({ error: 'petId query param required' });
+    if (!await ownsPet(petId, req.user.id)) return res.status(404).json({ error: 'Pet not found' });
+
+    const { rows } = await pool.query(
+      'SELECT * FROM meal_schedules WHERE pet_id = $1 ORDER BY start_date ASC',
+      [petId]
+    );
+    res.json(rows.map(r => ({
+      id: r.id, petId: r.pet_id, name: r.name, recurrence: r.recurrence,
+      customDays: r.custom_days ? JSON.parse(r.custom_days) : undefined,
+      meals: JSON.parse(r.meals), startDate: r.start_date,
+      endDate: r.end_date || undefined, enabled: r.enabled,
+    })));
+  } catch (err) { next(err); }
+});
+
+// POST /api/meals/schedules
+router.post('/schedules', auth, async (req, res, next) => {
+  try {
+    const { petId, name, recurrence, customDays, meals, startDate, endDate, enabled } = req.body;
+    if (!petId || !name || !recurrence || !Array.isArray(meals) || !startDate) {
+      return res.status(400).json({ error: 'petId, name, recurrence, meals, and startDate are required' });
+    }
+    if (!await ownsPet(petId, req.user.id)) return res.status(404).json({ error: 'Pet not found' });
+
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO meal_schedules (id, pet_id, user_id, name, recurrence, custom_days, meals, start_date, end_date, enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [id, petId, req.user.id, name, recurrence,
+       customDays ? JSON.stringify(customDays) : null,
+       JSON.stringify(meals), startDate, endDate || null, enabled !== false]
+    );
+
+    res.status(201).json({
+      id, petId, name, recurrence, customDays, meals, startDate,
+      endDate: endDate || undefined, enabled: enabled !== false,
+    });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/meals/schedules/:id
+router.put('/schedules/:id', auth, async (req, res, next) => {
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM meal_schedules WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    const row = existing.rows[0];
+    if (!row) return res.status(404).json({ error: 'Schedule not found' });
+
+    const { name, recurrence, customDays, meals, startDate, endDate, enabled } = req.body;
+    const { rows } = await pool.query(
+      `UPDATE meal_schedules SET name = $1, recurrence = $2, custom_days = $3, meals = $4,
+       start_date = $5, end_date = $6, enabled = $7 WHERE id = $8 RETURNING *`,
+      [
+        name ?? row.name, recurrence ?? row.recurrence,
+        customDays !== undefined ? (customDays ? JSON.stringify(customDays) : null) : row.custom_days,
+        meals ? JSON.stringify(meals) : row.meals,
+        startDate ?? row.start_date, endDate !== undefined ? (endDate || null) : row.end_date,
+        enabled !== undefined ? enabled : row.enabled, row.id,
+      ]
+    );
+
+    const u = rows[0];
+    res.json({
+      id: u.id, petId: u.pet_id, name: u.name, recurrence: u.recurrence,
+      customDays: u.custom_days ? JSON.parse(u.custom_days) : undefined,
+      meals: JSON.parse(u.meals), startDate: u.start_date,
+      endDate: u.end_date || undefined, enabled: u.enabled,
+    });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/meals/schedules/:id
+router.delete('/schedules/:id', auth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id FROM meal_schedules WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Schedule not found' });
+    await pool.query('DELETE FROM meal_schedules WHERE id = $1', [rows[0].id]);
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
+// ─── Daily Meal Plans ────────────────────────────────────────────────────────
+
+// GET /api/meals/plans?petId=
+router.get('/plans', auth, async (req, res, next) => {
+  try {
+    const { petId } = req.query;
+    if (!petId) return res.status(400).json({ error: 'petId query param required' });
+    if (!await ownsPet(petId, req.user.id)) return res.status(404).json({ error: 'Pet not found' });
+
+    const { rows } = await pool.query(
+      'SELECT * FROM daily_meal_plans WHERE pet_id = $1 ORDER BY date DESC',
+      [petId]
+    );
+    res.json(rows.map(r => ({
+      id: r.id, petId: r.pet_id, date: r.date, meals: JSON.parse(r.meals),
+    })));
+  } catch (err) { next(err); }
+});
+
+// POST /api/meals/plans
+router.post('/plans', auth, async (req, res, next) => {
+  try {
+    const { petId, date, meals } = req.body;
+    if (!petId || !date || !Array.isArray(meals)) {
+      return res.status(400).json({ error: 'petId, date, and meals (array) are required' });
+    }
+    if (!await ownsPet(petId, req.user.id)) return res.status(404).json({ error: 'Pet not found' });
+
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO daily_meal_plans (id, pet_id, user_id, date, meals) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (pet_id, date) DO UPDATE SET meals = $5`,
+      [id, petId, req.user.id, date, JSON.stringify(meals)]
+    );
+
+    res.status(201).json({ id, petId, date, meals });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/meals/plans/:id
+router.put('/plans/:id', auth, async (req, res, next) => {
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM daily_meal_plans WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    const row = existing.rows[0];
+    if (!row) return res.status(404).json({ error: 'Meal plan not found' });
+
+    const { date, meals } = req.body;
+    const { rows } = await pool.query(
+      'UPDATE daily_meal_plans SET date = $1, meals = $2 WHERE id = $3 RETURNING *',
+      [date ?? row.date, meals ? JSON.stringify(meals) : row.meals, row.id]
+    );
+
+    const updated = rows[0];
+    res.json({
+      id: updated.id, petId: updated.pet_id, date: updated.date,
+      meals: JSON.parse(updated.meals),
+    });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/meals/plans/:id
+router.delete('/plans/:id', auth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id FROM daily_meal_plans WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Meal plan not found' });
+    await pool.query('DELETE FROM daily_meal_plans WHERE id = $1', [rows[0].id]);
+    res.status(204).end();
+  } catch (err) { next(err); }
+});
+
 // ─── Meal Logs ───────────────────────────────────────────────────────────────
 
 // GET /api/meals?petId=

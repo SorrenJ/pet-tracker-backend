@@ -80,6 +80,28 @@ async function initSchema() {
       label TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS meal_schedules (
+      id TEXT PRIMARY KEY,
+      pet_id TEXT NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      recurrence TEXT NOT NULL,
+      custom_days TEXT,
+      meals TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_meal_plans (
+      id TEXT PRIMARY KEY,
+      pet_id TEXT NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      meals TEXT NOT NULL,
+      UNIQUE(pet_id, date)
+    );
+
     CREATE TABLE IF NOT EXISTS health_documents (
       id TEXT PRIMARY KEY,
       pet_id TEXT NOT NULL REFERENCES pets(id) ON DELETE CASCADE,
